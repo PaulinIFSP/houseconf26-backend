@@ -76,7 +76,7 @@ app.post("/create-payment", async (req, res) => {
 
     res.json({
       success: true,
-      checkoutUrl: response.init_point
+      init_point: response.init_point
     });
 
   } catch (error) {
