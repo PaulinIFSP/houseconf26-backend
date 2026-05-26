@@ -18,11 +18,22 @@ const preference = new Preference(client);
 
 const PRICES = {
   individual_lote1: 80,
+  individual: 80,
   individual_lote2: 100,
-  combo5: 380,
-  familia3: 220
-};
 
+  combo5: 380,
+  "combo5": 380,
+  "combo 5": 380,
+  "combo 5 amigos": 380,
+
+  familia3: 220,
+  combo_familia3: 220,
+  "combo familia": 220,
+  "combo família": 220,
+  "combo familia tres": 220,
+  "combo família três": 220,
+  "combfamilia tres": 220
+};
 app.get("/", (req, res) => {
   res.json({
     success: true,
