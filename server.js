@@ -39,6 +39,8 @@ app.post("/create-payment", async (req, res) => {
       tipo
     } = req.body;
 
+    console.log("TIPO RECEBIDO:", tipo);
+
     const valor = PRICES[tipo];
 
     if (!valor) {
