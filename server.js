@@ -22,8 +22,8 @@ const PRICES = {
   individual_lote2: 100,
 
   combo5: 380,
-  "combo5": 380,
   "combo 5": 380,
+  "combo5amigos": 380,
   "combo 5 amigos": 380,
 
   familia3: 220,
@@ -32,8 +32,10 @@ const PRICES = {
   "combo família": 220,
   "combo familia tres": 220,
   "combo família três": 220,
-  "combfamilia tres": 220
+  "combfamilia tres": 220,
+  "combo-familia-3": 220
 };
+
 app.get("/", (req, res) => {
   res.json({
     success: true,
