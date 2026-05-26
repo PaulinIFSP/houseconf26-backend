@@ -22,17 +22,19 @@ const PRICES = {
   individual_lote2: 100,
 
   combo5: 380,
+  combo5_lote1: 380,
   "combo 5": 380,
   "combo5amigos": 380,
   "combo 5 amigos": 380,
 
   familia3: 220,
+  familia3_lote1: 220,
   combo_familia3: 220,
   "combo familia": 220,
   "combo família": 220,
   "combo familia tres": 220,
   "combo família três": 220,
-  "combfamilia tres": 220,
+  "combofamilia tres": 220,
   "combo-familia-3": 220
 };
 
