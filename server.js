@@ -80,6 +80,12 @@ app.post("/create-payment", async (req, res) => {
           name: nome,
           email: email
         },
+        
+        external_reference: `HC26-${Date.now()}`,
+          notification_url: "https://houseconf26-backend.onrender.com/webhook",
+          payment_methods: {
+          installments: 3
+        },
 
         back_urls: {
           success: "https://SEUSITE.com/confirmacao.html",
@@ -106,7 +112,18 @@ app.post("/create-payment", async (req, res) => {
     });
   }
 });
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("WEBHOOK RECEBIDO");
+    console.log(req.body);
+    console.log(req.query);
 
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("ERRO WEBHOOK:", error);
+    res.sendStatus(200);
+  }
+});
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
