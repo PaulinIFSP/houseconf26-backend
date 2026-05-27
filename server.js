@@ -66,41 +66,41 @@ app.post("/create-payment", async (req, res) => {
     }
 
     const response = await preference.create({
-      body: {
-        items: [
-          {
-            title: `House Conf 26 - ${tipo}`,
-            quantity: 1,
-            currency_id: "BRL",
-            unit_price: valor
-          }
-        ],
-
-        payer: {
-          name: nome,
-          email: email
-        },
-        
-        external_reference: `HC26-${Date.now()}`,
-        notification_url: "https://houseconf26-backend.onrender.com/webhook",
-
-        payment_methods: {
-          excluded_payment_types: [
-            { id: "ticket" }
-          ],
-          installments: 3
-        },
-        },
-
-        back_urls: {
-          success: "https://SEUSITE.com/confirmacao.html",
-          failure: "https://SEUSITE.com/inscricao.html",
-          pending: "https://SEUSITE.com/inscricao.html"
-        },
-
-        auto_return: "approved"
+  body: {
+    items: [
+      {
+        title: `House Conf 26 - ${tipo}`,
+        quantity: 1,
+        currency_id: "BRL",
+        unit_price: valor
       }
-    });
+    ],
+
+    payer: {
+      name: nome,
+      email: email
+    },
+
+    external_reference: `HC26-${Date.now()}`,
+
+    notification_url: "https://houseconf26-backend.onrender.com/webhook",
+
+    payment_methods: {
+      excluded_payment_types: [
+        { id: "ticket" }
+      ],
+      installments: 3
+    },
+
+    back_urls: {
+      success: "https://houseconf.com.br/confirmacao.html",
+      failure: "https://houseconf.com.br/inscricao.html",
+      pending: "https://houseconf.com.br/inscricao.html"
+    },
+
+    auto_return: "approved"
+  }
+});
 
     res.json({
       success: true,
