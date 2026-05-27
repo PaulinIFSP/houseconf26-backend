@@ -84,7 +84,11 @@ app.post("/create-payment", async (req, res) => {
         external_reference: `HC26-${Date.now()}`,
           notification_url: "https://houseconf26-backend.onrender.com/webhook",
           payment_methods: {
-          installments: 3
+            excluded_payment_types: [
+              { id: "ticket" }
+              ],
+              installments: 3
+          },
         },
 
         back_urls: {
