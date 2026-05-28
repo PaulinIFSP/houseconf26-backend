@@ -17,25 +17,25 @@ const client = new MercadoPagoConfig({
 const preference = new Preference(client);
 
 const PRICES = {
-  individual_lote1: 5,
-  individual: 5,
-  individual_lote2: 5,
+  individual_lote1: 10,
+  individual: 10,
+  individual_lote2: 10,
 
-  combo5: 5,
-  combo5_lote1: 5,
-  "combo 5": 5,
-  "combo5amigos": 5,
-  "combo 5 amigos": 5,
+  combo5: 10,
+  combo5_lote1: 10,
+  "combo 5": 10,
+  "combo5amigos": 10,
+  "combo 5 amigos": 10,
 
-  familia3: 5,
-  familia3_lote1: 5,
-  combo_familia3: 5,
-  "combo familia": 5,
-  "combo família": 5,
-  "combo família tres": 5,
-  "combo família três": 5,
-  "combofamilia tres": 5,
-  "combo-familia-3": 5
+  familia3: 10,
+  familia3_lote1: 10,
+  combo_familia3: 10,
+  "combo familia": 10,
+  "combo família": 10,
+  "combo família tres": 10,
+  "combo família três": 10,
+  "combofamilia tres": 10,
+  "combo-familia-3": 10
 };
 
 app.get("/", (req, res) => {
