@@ -40,11 +40,40 @@ const PRICES = {
 };
 
 const PAYMENT_METHODS = {
-  pix: { label: "Pix", fee: 0, installments: 1 },
-  debito: { label: "Débito", fee: 0, installments: 1 },
-  credito1x: { label: "Crédito 1x", fee: 0.0498, installments: 1 },
-  credito2x: { label: "Crédito 2x", fee: 0.0498, installments: 2 },
-  credito3x: { label: "Crédito 3x", fee: 0.0498, installments: 3 }
+  pix: {
+    label: "Pix",
+    fee: 0,
+    installments: 1,
+    allowed: "pix"
+  },
+
+  debito: {
+    label: "Débito",
+    fee: 0,
+    installments: 1,
+    allowed: "debito"
+  },
+
+  credito1x: {
+    label: "Crédito 1x",
+    fee: 0.0498,
+    installments: 1,
+    allowed: "credito"
+  },
+
+  credito2x: {
+    label: "Crédito 2x",
+    fee: 0.0498,
+    installments: 2,
+    allowed: "credito"
+  },
+
+  credito3x: {
+    label: "Crédito 3x",
+    fee: 0.0498,
+    installments: 3,
+    allowed: "credito"
+  }
 };
 
 // Armazenamento simples em memória: útil para painel inicial.
@@ -90,28 +119,40 @@ function calcularValorFinal(valorBase, metodoPagamento) {
 }
 
 function buildPaymentMethods(metodoPagamento) {
+function buildPaymentMethods(metodoPagamento) {
   const metodo = PAYMENT_METHODS[metodoPagamento] || PAYMENT_METHODS.credito1x;
-  const common = { installments: metodo.installments };
 
-  // Checkout Pro ainda pode aplicar regras próprias, mas isto orienta o fluxo.
-  if (metodoPagamento === "pix") {
+  if (metodo.allowed === "pix") {
     return {
-      ...common,
+      installments: 1,
       default_payment_method_id: "pix",
-      excluded_payment_types: [{ id: "credit_card" }, { id: "debit_card" }, { id: "ticket" }]
+      excluded_payment_types: [
+        { id: "credit_card" },
+        { id: "debit_card" },
+        { id: "ticket" }
+      ]
     };
   }
 
-  if (metodoPagamento === "debito") {
+  if (metodo.allowed === "debito") {
     return {
-      ...common,
-      excluded_payment_types: [{ id: "credit_card" }, { id: "ticket" }]
+      installments: 1,
+      excluded_payment_types: [
+        { id: "credit_card" },
+        { id: "ticket" },
+        { id: "bank_transfer" }
+      ]
     };
   }
 
   return {
-    ...common,
-    excluded_payment_types: [{ id: "ticket" }]
+    installments: metodo.installments,
+    default_installments: metodo.installments,
+    excluded_payment_types: [
+      { id: "debit_card" },
+      { id: "ticket" },
+      { id: "bank_transfer" }
+    ]
   };
 }
 
@@ -204,7 +245,16 @@ app.post("/create-payment", async (req, res) => {
     const current = registrations.get(codigo);
     registrations.set(codigo, { ...current, preference_id: response.id || "" });
 
-    res.json({ success: true, reference: codigo, codigo_inscricao: codigo, valor_base: valorBase, valor_final: valorFinal, init_point: response.init_point });
+  res.json({
+  success: true,
+  reference: codigo,
+  codigo_inscricao: codigo,
+  metodo_pagamento: metodo,
+  metodo_label: PAYMENT_METHODS[metodo]?.label || metodo,
+  valor_base: valorBase,
+  valor_final: valorFinal,
+  init_point: response.init_point
+});
   } catch (error) {
     console.error("ERRO AO CRIAR PAGAMENTO:", error);
     res.status(500).json({ success: false, message: error.message });
