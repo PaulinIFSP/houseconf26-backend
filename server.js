@@ -1,157 +1,213 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { MercadoPagoConfig, Preference } from "mercadopago";
+import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
+
+// House Conf 26 — backend Mercado Pago + painel simples
+// ENV obrigatória no Render: MP_ACCESS_TOKEN
+// ENV recomendada para painel: ADMIN_TOKEN=uma-senha-forte
 
 dotenv.config();
 
 const app = express();
-
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
-const client = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN
-});
-
+const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 const preference = new Preference(client);
+const paymentClient = new Payment(client);
+
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "HC26ADMIN";
 
 const PRICES = {
-  individual_lote1: 10,
-  individual: 10,
-  individual_lote2: 10,
-
-  combo5: 10,
-  combo5_lote1: 10,
-  "combo 5": 10,
-  combo5amigos: 10,
-  "combo 5 amigos": 10,
-
-  familia3: 10,
-  familia3_lote1: 10,
-  combo_familia3: 10,
-  "combo familia": 10,
-  "combo família": 10,
-  "combo família tres": 10,
-  "combo família três": 10,
-  "combofamilia tres": 10,
-  "combo-familia-3": 10
+  individual_lote1: 80,
+  individual: 80,
+  individual_lote2: 100,
+  combo5: 380,
+  combo5_lote1: 380,
+  "combo 5": 380,
+  combo5amigos: 380,
+  "combo 5 amigos": 380,
+  familia3: 220,
+  familia3_lote1: 220,
+  combo_familia3: 220,
+  "combo familia": 220,
+  "combo família": 220,
+  "combo família tres": 220,
+  "combo família três": 220,
+  "combofamilia tres": 220,
+  "combo-familia-3": 220
 };
 
-function normalizarTipo(tipo) {
-  if (!tipo) return "";
+const PAYMENT_METHODS = {
+  pix: { label: "Pix", fee: 0, installments: 1 },
+  debito: { label: "Débito", fee: 0, installments: 1 },
+  credito1x: { label: "Crédito 1x", fee: 0.0498, installments: 1 },
+  credito2x: { label: "Crédito 2x", fee: 0.0498, installments: 2 },
+  credito3x: { label: "Crédito 3x", fee: 0.0498, installments: 3 }
+};
 
-  return String(tipo)
+// Armazenamento simples em memória: útil para painel inicial.
+// Em produção avançada, substituir por Google Sheets/DB persistente.
+const registrations = new Map();
+const webhookEvents = [];
+
+function normalizarTexto(value) {
+  return String(value || "")
     .trim()
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function normalizarTipo(tipoOriginal) {
+  const raw = normalizarTexto(tipoOriginal).replace(/[_-]/g, " ");
+  if (raw.includes("combo") && raw.includes("5")) return "combo5_lote1";
+  if (raw.includes("famil") || raw.includes("familia") || raw.includes("3")) return "familia3_lote1";
+  if (raw.includes("lote2") || raw.includes("lote 2")) return "individual_lote2";
+  if (raw.includes("individual")) return "individual_lote1";
+  return tipoOriginal;
+}
+
 function obterValor(tipoOriginal) {
-  const tipoNormalizado = normalizarTipo(tipoOriginal);
+  const tipo = normalizarTipo(tipoOriginal);
+  return PRICES[tipo] || PRICES[tipoOriginal];
+}
 
-  const mapaTipos = {
-    individual_lote1: "individual_lote1",
-    individual: "individual",
-    individual_lote2: "individual_lote2",
+function gerarCodigoInscricao() {
+  const random = Math.floor(100000 + Math.random() * 900000);
+  return `HC26-${random}`;
+}
 
-    combo5: "combo5",
-    combo5_lote1: "combo5_lote1",
-    "combo 5": "combo 5",
-    combo5amigos: "combo5amigos",
-    "combo 5 amigos": "combo 5 amigos",
+function arredondar(valor) {
+  return Math.round((Number(valor) + Number.EPSILON) * 100) / 100;
+}
 
-    familia3: "familia3",
-    familia3_lote1: "familia3_lote1",
-    combo_familia3: "combo_familia3",
-    "combo familia": "combo familia",
-    "combo familia tres": "combo família tres",
-    "combo familia tres": "combo família três",
-    "combofamilia tres": "combofamilia tres",
-    "combo-familia-3": "combo-familia-3"
+function calcularValorFinal(valorBase, metodoPagamento) {
+  const metodo = PAYMENT_METHODS[metodoPagamento] || PAYMENT_METHODS.pix;
+  if (!metodo.fee) return arredondar(valorBase);
+  return arredondar(valorBase / (1 - metodo.fee));
+}
+
+function buildPaymentMethods(metodoPagamento) {
+  const metodo = PAYMENT_METHODS[metodoPagamento] || PAYMENT_METHODS.credito1x;
+  const common = { installments: metodo.installments };
+
+  // Checkout Pro ainda pode aplicar regras próprias, mas isto orienta o fluxo.
+  if (metodoPagamento === "pix") {
+    return {
+      ...common,
+      default_payment_method_id: "pix",
+      excluded_payment_types: [{ id: "credit_card" }, { id: "debit_card" }, { id: "ticket" }]
+    };
+  }
+
+  if (metodoPagamento === "debito") {
+    return {
+      ...common,
+      excluded_payment_types: [{ id: "credit_card" }, { id: "ticket" }]
+    };
+  }
+
+  return {
+    ...common,
+    excluded_payment_types: [{ id: "ticket" }]
   };
+}
 
-  const chaveFinal = mapaTipos[tipoNormalizado] || tipoOriginal;
-  return PRICES[chaveFinal];
+function authAdmin(req, res, next) {
+  const token = req.headers["x-admin-token"] || req.query.token;
+  if (token !== ADMIN_TOKEN) {
+    return res.status(401).json({ success: false, message: "Acesso não autorizado" });
+  }
+  next();
 }
 
 app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "House Conf 26 Backend Online"
-  });
+  res.json({ success: true, message: "House Conf 26 Backend Online" });
 });
 
 app.post("/create-payment", async (req, res) => {
   try {
-    const { nome, email, tipo } = req.body;
+    const {
+      reference,
+      codigo_inscricao,
+      nome,
+      email,
+      whatsapp,
+      cpf,
+      tipo,
+      tipo_label,
+      quantidade_participantes,
+      metodo_pagamento,
+      participantes
+    } = req.body;
 
-    console.log("BODY RECEBIDO:", req.body);
-    console.log("TIPO RECEBIDO:", tipo);
+    const tipoNormalizado = normalizarTipo(tipo);
+    const valorBase = obterValor(tipoNormalizado);
+    const metodo = PAYMENT_METHODS[metodo_pagamento] ? metodo_pagamento : "credito1x";
+    const valorFinal = calcularValorFinal(valorBase, metodo);
+    const codigo = codigo_inscricao || reference || gerarCodigoInscricao();
 
-    const valor = obterValor(tipo);
+    console.log("CREATE PAYMENT:", { codigo, tipo, tipoNormalizado, metodo, valorBase, valorFinal });
 
-    console.log("VALOR CALCULADO:", valor);
-
-    if (!valor) {
-      return res.status(400).json({
-        success: false,
-        message: "Tipo de inscrição inválido",
-        tipoRecebido: tipo
-      });
+    if (!valorBase) {
+      return res.status(400).json({ success: false, message: "Tipo de inscrição inválido", tipoRecebido: tipo });
     }
+
+    registrations.set(codigo, {
+      codigo_inscricao: codigo,
+      created_at: new Date().toISOString(),
+      nome: nome || "",
+      email: email || "",
+      whatsapp: whatsapp || "",
+      cpf: cpf || "",
+      tipo: tipoNormalizado,
+      tipo_label: tipo_label || tipoNormalizado,
+      quantidade_participantes: Number(quantidade_participantes || 1),
+      metodo_pagamento: metodo,
+      valor_base: valorBase,
+      valor_final: valorFinal,
+      status_pagamento: "pendente",
+      payment_id: "",
+      participantes: Array.isArray(participantes) ? participantes : []
+    });
 
     const response = await preference.create({
       body: {
-        items: [
-          {
-            title: `House Conf 26 - ${tipo}`,
-            quantity: 1,
-            currency_id: "BRL",
-            unit_price: valor
-          }
-        ],
-
-        payer: {
-          name: nome || "",
-          email: email || ""
-        },
-
-        external_reference: `HC26-${Date.now()}`,
-
+        items: [{
+          title: `House Conf 26 - ${tipo_label || tipoNormalizado}`,
+          quantity: 1,
+          currency_id: "BRL",
+          unit_price: valorFinal
+        }],
+        payer: { name: nome || "", email: email || "" },
+        external_reference: codigo,
         notification_url: "https://houseconf26-backend.onrender.com/webhook",
-
-        payment_methods: {
-          installments: 3
+        payment_methods: buildPaymentMethods(metodo),
+        metadata: {
+          codigo_inscricao: codigo,
+          tipo: tipoNormalizado,
+          metodo_pagamento: metodo,
+          valor_base: valorBase,
+          valor_final: valorFinal
         },
-
         back_urls: {
-          success: "https://houseconf.com.br/confirmacao.html",
+          success: `https://houseconf.com.br/confirmacao.html?codigo=${encodeURIComponent(codigo)}`,
           failure: "https://houseconf.com.br/inscricao.html",
           pending: "https://houseconf.com.br/inscricao.html"
         },
-
         auto_return: "approved"
       }
     });
 
-    console.log("PREFERÊNCIA CRIADA:", {
-      id: response.id,
-      init_point: response.init_point
-    });
+    const current = registrations.get(codigo);
+    registrations.set(codigo, { ...current, preference_id: response.id || "" });
 
-    res.json({
-      success: true,
-      init_point: response.init_point
-    });
+    res.json({ success: true, reference: codigo, codigo_inscricao: codigo, valor_base: valorBase, valor_final: valorFinal, init_point: response.init_point });
   } catch (error) {
     console.error("ERRO AO CRIAR PAGAMENTO:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -161,6 +217,33 @@ app.post("/webhook", async (req, res) => {
     console.log("BODY:", req.body);
     console.log("QUERY:", req.query);
 
+    webhookEvents.unshift({ at: new Date().toISOString(), body: req.body, query: req.query });
+    webhookEvents.splice(80);
+
+    const paymentId = req.body?.data?.id || req.body?.id || req.query?.id;
+    const type = req.body?.type || req.body?.topic || req.query?.type || req.query?.topic;
+
+    if (paymentId && String(type).includes("payment")) {
+      try {
+        const payment = await paymentClient.get({ id: paymentId });
+        const ref = payment?.external_reference || payment?.metadata?.codigo_inscricao;
+        console.log("PAGAMENTO CONSULTADO:", { paymentId, status: payment?.status, ref });
+        if (ref && registrations.has(ref)) {
+          const reg = registrations.get(ref);
+          registrations.set(ref, {
+            ...reg,
+            status_pagamento: payment?.status === "approved" ? "aprovado" : payment?.status || reg.status_pagamento,
+            payment_id: String(paymentId),
+            payment_status_detail: payment?.status_detail || "",
+            paid_at: payment?.date_approved || "",
+            updated_at: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        console.error("ERRO AO CONSULTAR PAGAMENTO:", err.message);
+      }
+    }
+
     res.sendStatus(200);
   } catch (error) {
     console.error("ERRO WEBHOOK:", error);
@@ -168,8 +251,17 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Servidor iniciado na porta ${PORT}`);
+app.get("/admin/stats", authAdmin, (req, res) => {
+  const items = Array.from(registrations.values()).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const total = items.length;
+  const aprovados = items.filter(i => i.status_pagamento === "aprovado").length;
+  const pendentes = items.filter(i => i.status_pagamento !== "aprovado").length;
+  const participantes = items.reduce((acc, i) => acc + Number(i.quantidade_participantes || 1), 0);
+  const receitaBruta = items.filter(i => i.status_pagamento === "aprovado").reduce((acc, i) => acc + Number(i.valor_final || 0), 0);
+  const porTipo = items.reduce((acc, i) => { acc[i.tipo_label || i.tipo] = (acc[i.tipo_label || i.tipo] || 0) + 1; return acc; }, {});
+  const porStatus = items.reduce((acc, i) => { acc[i.status_pagamento] = (acc[i.status_pagamento] || 0) + 1; return acc; }, {});
+  res.json({ success: true, summary: { total, aprovados, pendentes, participantes, receitaBruta }, porTipo, porStatus, items, webhookEvents });
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor iniciado na porta ${PORT}`));
