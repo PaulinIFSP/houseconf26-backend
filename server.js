@@ -3,15 +3,11 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
 
-// House Conf 26 — backend Mercado Pago + painel simples
-// ENV obrigatória no Render: MP_ACCESS_TOKEN
-// ENV recomendada para painel: ADMIN_TOKEN=uma-senha-forte
-
 dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN
@@ -21,6 +17,7 @@ const preference = new Preference(client);
 const paymentClient = new Payment(client);
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "HC26ADMIN";
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || "";
 
 const PRICES = {
   individual_lote1: 80,
@@ -81,8 +78,6 @@ const PAYMENT_METHODS = {
   }
 };
 
-// Armazenamento simples em memória.
-// Próximo passo: substituir por Google Sheets/DB persistente.
 const registrations = new Map();
 const webhookEvents = [];
 
@@ -166,6 +161,59 @@ function buildPaymentMethods(metodoPagamento) {
   };
 }
 
+async function callAppsScript(payload) {
+  if (!APPS_SCRIPT_URL) {
+    console.warn("APPS_SCRIPT_URL não configurada.");
+    return null;
+  }
+
+  try {
+    const response = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const text = await response.text();
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return {
+        success: response.ok,
+        raw: text
+      };
+    }
+  } catch (error) {
+    console.error("ERRO APPS SCRIPT:", error.message);
+    return {
+      success: false,
+      message: error.message
+    };
+  }
+}
+
+async function getAppsScriptStats() {
+  if (!APPS_SCRIPT_URL) return null;
+
+  try {
+    const url = `${APPS_SCRIPT_URL}?action=stats`;
+    const response = await fetch(url);
+    const text = await response.text();
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    console.error("ERRO AO BUSCAR STATS APPS SCRIPT:", error.message);
+    return null;
+  }
+}
+
 function authAdmin(req, res, next) {
   const token = req.headers["x-admin-token"] || req.query.token;
 
@@ -179,10 +227,57 @@ function authAdmin(req, res, next) {
   next();
 }
 
+function buildMemoryStats() {
+  const items = Array.from(registrations.values())
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+
+  const total = items.length;
+  const aprovados = items.filter(item => item.status_pagamento === "APROVADO").length;
+  const pendentes = items.filter(item => item.status_pagamento !== "APROVADO").length;
+
+  const participantes = items.reduce((acc, item) => {
+    return acc + Number(item.quantidade_participantes || 1);
+  }, 0);
+
+  const receitaBruta = items
+    .filter(item => item.status_pagamento === "APROVADO")
+    .reduce((acc, item) => {
+      return acc + Number(item.valor_final || 0);
+    }, 0);
+
+  const porTipo = items.reduce((acc, item) => {
+    const tipo = item.tipo_label || item.tipo || "Não informado";
+    acc[tipo] = (acc[tipo] || 0) + 1;
+    return acc;
+  }, {});
+
+  const porStatus = items.reduce((acc, item) => {
+    const status = item.status_pagamento || "Não informado";
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    success: true,
+    summary: {
+      total,
+      aprovados,
+      pendentes,
+      participantes,
+      receitaBruta
+    },
+    porTipo,
+    porStatus,
+    items,
+    webhookEvents
+  };
+}
+
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "House Conf 26 Backend Online"
+    message: "House Conf 26 Backend Online",
+    appsScript: Boolean(APPS_SCRIPT_URL)
   });
 });
 
@@ -195,6 +290,7 @@ app.post("/create-payment", async (req, res) => {
       email,
       whatsapp,
       cpf,
+      nascimento,
       tipo,
       tipo_label,
       quantidade_participantes,
@@ -232,13 +328,14 @@ app.post("/create-payment", async (req, res) => {
       email: email || "",
       whatsapp: whatsapp || "",
       cpf: cpf || "",
+      nascimento: nascimento || "",
       tipo: tipoNormalizado,
       tipo_label: tipo_label || tipoNormalizado,
       quantidade_participantes: Number(quantidade_participantes || 1),
       metodo_pagamento: metodo,
       valor_base: valorBase,
       valor_final: valorFinal,
-      status_pagamento: "pendente",
+      status_pagamento: "AGUARDANDO PAGAMENTO",
       payment_id: "",
       participantes: Array.isArray(participantes) ? participantes : []
     });
@@ -290,6 +387,27 @@ app.post("/create-payment", async (req, res) => {
       preference_id: response.id || ""
     });
 
+    const sheetResult = await callAppsScript({
+      action: "create_registration",
+      codigo_inscricao: codigo,
+      nome: nome || "",
+      cpf: cpf || "",
+      nascimento: nascimento || "",
+      whatsapp: whatsapp || "",
+      email: email || "",
+      tipo: tipoNormalizado,
+      tipo_label: tipo_label || tipoNormalizado,
+      quantidade_participantes: Number(quantidade_participantes || 1),
+      metodo_pagamento: metodo,
+      valor_base: valorBase,
+      valor_final: valorFinal,
+      preference_id: response.id || "",
+      status_pagamento: "AGUARDANDO PAGAMENTO",
+      participantes: Array.isArray(participantes) ? participantes : []
+    });
+
+    console.log("PLANILHA CREATE:", sheetResult);
+
     res.json({
       success: true,
       reference: codigo,
@@ -298,7 +416,8 @@ app.post("/create-payment", async (req, res) => {
       metodo_label: PAYMENT_METHODS[metodo]?.label || metodo,
       valor_base: valorBase,
       valor_final: valorFinal,
-      init_point: response.init_point
+      init_point: response.init_point,
+      sheet: sheetResult
     });
 
   } catch (error) {
@@ -331,7 +450,6 @@ app.post("/webhook", async (req, res) => {
     if (paymentId && String(type).includes("payment")) {
       try {
         const payment = await paymentClient.get({ id: paymentId });
-
         const ref = payment?.external_reference || payment?.metadata?.codigo_inscricao;
 
         console.log("PAGAMENTO CONSULTADO:", {
@@ -340,17 +458,33 @@ app.post("/webhook", async (req, res) => {
           ref
         });
 
-        if (ref && registrations.has(ref)) {
-          const reg = registrations.get(ref);
+        if (ref) {
+          const statusFinal = payment?.status === "approved"
+            ? "APROVADO"
+            : String(payment?.status || "PENDENTE").toUpperCase();
 
-          registrations.set(ref, {
-            ...reg,
-            status_pagamento: payment?.status === "approved" ? "aprovado" : payment?.status || reg.status_pagamento,
+          if (registrations.has(ref)) {
+            const reg = registrations.get(ref);
+
+            registrations.set(ref, {
+              ...reg,
+              status_pagamento: statusFinal,
+              payment_id: String(paymentId),
+              payment_status_detail: payment?.status_detail || "",
+              paid_at: payment?.date_approved || "",
+              updated_at: new Date().toISOString()
+            });
+          }
+
+          const sheetUpdate = await callAppsScript({
+            action: "update_payment",
+            codigo_inscricao: ref,
+            status_pagamento: statusFinal,
             payment_id: String(paymentId),
-            payment_status_detail: payment?.status_detail || "",
-            paid_at: payment?.date_approved || "",
-            updated_at: new Date().toISOString()
+            data_pagamento: payment?.date_approved || new Date().toISOString()
           });
+
+          console.log("PLANILHA UPDATE:", sheetUpdate);
         }
 
       } catch (err) {
@@ -366,51 +500,19 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-app.get("/admin/stats", authAdmin, (req, res) => {
-  const items = Array.from(registrations.values())
-    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+app.get("/admin/stats", authAdmin, async (req, res) => {
+  const sheetStats = await getAppsScriptStats();
 
-  const total = items.length;
+  if (sheetStats && sheetStats.success) {
+    return res.json({
+      ...sheetStats,
+      source: "google_sheets"
+    });
+  }
 
-  const aprovados = items.filter(item => item.status_pagamento === "aprovado").length;
-
-  const pendentes = items.filter(item => item.status_pagamento !== "aprovado").length;
-
-  const participantes = items.reduce((acc, item) => {
-    return acc + Number(item.quantidade_participantes || 1);
-  }, 0);
-
-  const receitaBruta = items
-    .filter(item => item.status_pagamento === "aprovado")
-    .reduce((acc, item) => {
-      return acc + Number(item.valor_final || 0);
-    }, 0);
-
-  const porTipo = items.reduce((acc, item) => {
-    const tipo = item.tipo_label || item.tipo || "Não informado";
-    acc[tipo] = (acc[tipo] || 0) + 1;
-    return acc;
-  }, {});
-
-  const porStatus = items.reduce((acc, item) => {
-    const status = item.status_pagamento || "Não informado";
-    acc[status] = (acc[status] || 0) + 1;
-    return acc;
-  }, {});
-
-  res.json({
-    success: true,
-    summary: {
-      total,
-      aprovados,
-      pendentes,
-      participantes,
-      receitaBruta
-    },
-    porTipo,
-    porStatus,
-    items,
-    webhookEvents
+  return res.json({
+    ...buildMemoryStats(),
+    source: "memory"
   });
 });
 
